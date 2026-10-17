@@ -1,48 +1,35 @@
+
 name: Terraform Azure
 
 on:
   workflow_dispatch:
 
-# id-token: write e necessario para o login no Azure via OIDC (credencial federada)
 permissions:
   id-token: write
   contents: read
 
+env:
+  ARM_USE_OIDC: true
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
 jobs:
   terraform:
     runs-on: ubuntu-latest
-    env:
-      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      ARM_USE_OIDC: "true"
 
     steps:
       - name: Baixar codigo
         uses: actions/checkout@v4
 
-      - name: Verificar secrets
-        env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
-        run: |
-          for nome in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID SSH_PUBLIC_KEY; do
-            if [ -z "${!nome}" ]; then
-              echo "::error::Secret $nome nao cadastrada em Settings > Secrets and variables > Actions"
-              faltando=1
-            fi
-          done
-          exit ${faltando:-0}
-
       - name: Instalar Terraform
         uses: hashicorp/setup-terraform@v3
-
+      
       - name: Configurar chave publica SSH
         env:
           SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
-        run: echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> "$GITHUB_ENV"
+        run: |
+          echo "TF_VAR_admin_ssh_public_key=$SSH_PUBLIC_KEY" >> "$GITHUB_ENV"
 
       - name: Inicializar Terraform
         run: terraform init
@@ -51,7 +38,7 @@ jobs:
         run: terraform validate
 
       - name: Planejar Terraform
-        run: terraform plan -out=tfplan
-
+        run: terraform plan
+        
       - name: Aplicar Terraform
-        run: terraform apply -auto-approve tfplan
+        run: terraform apply -auto-approve      

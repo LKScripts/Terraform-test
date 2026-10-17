@@ -1,3 +1,4 @@
+
 terraform {
   required_providers {
     azurerm = {
@@ -7,70 +8,70 @@ terraform {
   }
 }
 
-# A autenticacao vem das variaveis ARM_* definidas no workflow (OIDC)
 provider "azurerm" {
   features {}
-  use_oidc = true
+
+  resource_provider_registrations = "none"
 }
 
-variable "location" {
-  description = "Regiao do Azure onde os recursos serao criados"
+# Chave publica gerada pelo GitHub Actions
+variable "admin_ssh_public_key" {
+  description = "Chave publica SSH temporaria do laboratorio"
   type        = string
-  default     = "South Africa North"
+  sensitive   = true
 }
 
-variable "vm_size" {
-  description = "Tamanho da maquina virtual"
-  type        = string
-  default     = "Standard_B2ats_v2"
-}
+# ============================================================
+# RESOURCE GROUP
+# ============================================================
 
-variable "admin_username" {
-  description = "Usuario administrador da VM"
-  type        = string
-  default     = "azureuser"
-}
-
-variable "ssh_public_key" {
-  description = "Chave publica SSH (vem da secret SSH_PUBLIC_KEY)"
-  type        = string
-}
-
-resource "azurerm_resource_group" "rg" {
+resource "azurerm_resource_group" "lab" {
   name     = "rg-terraform-aula"
-  location = var.location
+  location = "southafricanorth"
 }
 
-resource "azurerm_virtual_network" "vnet" {
+# ============================================================
+# REDE VIRTUAL E SUB-REDE
+# ============================================================
+
+resource "azurerm_virtual_network" "lab" {
   name                = "terraform-vnet"
-  address_space       = ["10.0.0.0/16"]
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.lab.location
+  resource_group_name = azurerm_resource_group.lab.name
+  address_space       = ["10.10.0.0/16"]
 }
 
-resource "azurerm_subnet" "subnet" {
-  name                 = "terraform-subnet"
-  resource_group_name  = azurerm_resource_group.rg.name
-  virtual_network_name = azurerm_virtual_network.vnet.name
-  address_prefixes     = ["10.0.1.0/24"]
+resource "azurerm_subnet" "default" {
+  name                 = "default"
+  resource_group_name  = azurerm_resource_group.lab.name
+  virtual_network_name = azurerm_virtual_network.lab.name
+  address_prefixes     = ["10.10.1.0/24"]
 }
 
-resource "azurerm_public_ip" "ip" {
-  name                = "terraform-ip"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  allocation_method   = "Static"
-  sku                 = "Standard"
-}
+# ============================================================
+# REGRAS DE SEGURANCA DA REDE
+# ============================================================
 
-resource "azurerm_network_security_group" "nsg" {
+resource "azurerm_network_security_group" "vm" {
   name                = "terraform-nsg"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.lab.location
+  resource_group_name = azurerm_resource_group.lab.name
 
   security_rule {
+    name                       = "HTTP"
+    priority                   = 1000
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+   
+  security_rule {
     name                       = "SSH"
-    priority                   = 1001
+    priority                   = 1100
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
@@ -81,36 +82,72 @@ resource "azurerm_network_security_group" "nsg" {
   }
 }
 
-resource "azurerm_network_interface" "nic" {
+# ============================================================
+# IP PUBLICO
+# ============================================================
+
+resource "azurerm_public_ip" "vm" {
+  name                = "terraform-ip"
+  location            = azurerm_resource_group.lab.location
+  resource_group_name = azurerm_resource_group.lab.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+# ============================================================
+# INTERFACE DE REDE
+# ============================================================
+
+resource "azurerm_network_interface" "vm" {
   name                = "terraform-nic"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.lab.location
+  resource_group_name = azurerm_resource_group.lab.name
 
   ip_configuration {
     name                          = "internal"
-    subnet_id                     = azurerm_subnet.subnet.id
+    subnet_id                     = azurerm_subnet.default.id
     private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.ip.id
+    public_ip_address_id          = azurerm_public_ip.vm.id
   }
 }
 
-resource "azurerm_network_interface_security_group_association" "nic_nsg" {
-  network_interface_id      = azurerm_network_interface.nic.id
-  network_security_group_id = azurerm_network_security_group.nsg.id
+resource "azurerm_network_interface_security_group_association" "vm" {
+  network_interface_id      = azurerm_network_interface.vm.id
+  network_security_group_id = azurerm_network_security_group.vm.id
 }
+
+# ============================================================
+# MAQUINA VIRTUAL LINUX COM DOCKER
+# ============================================================
 
 resource "azurerm_linux_virtual_machine" "vm" {
-  name                  = "terraform-linux-vm"
-  location              = azurerm_resource_group.rg.location
-  resource_group_name   = azurerm_resource_group.rg.name
-  size                  = var.vm_size
-  admin_username        = var.admin_username
-  network_interface_ids = [azurerm_network_interface.nic.id]
+  name                = "terraform-linux-vm"
+  resource_group_name = azurerm_resource_group.lab.name
+  location            = azurerm_resource_group.lab.location
+  size                = "Standard_B2ats_v2"
+
+  admin_username                  = "azureuser"
+  disable_password_authentication = true
+
+  network_interface_ids = [
+    azurerm_network_interface.vm.id
+  ]
 
   admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.ssh_public_key
+    username   = "azureuser"
+    public_key = var.admin_ssh_public_key
   }
+
+  custom_data = base64encode(<<-CLOUDCONFIG
+    #cloud-config
+    package_update: true
+    packages:
+      - docker.io
+    runcmd:
+      - [systemctl, enable, --now, docker]
+      - [usermod, -aG, docker, azureuser]
+  CLOUDCONFIG
+  )
 
   os_disk {
     caching              = "ReadWrite"
@@ -125,6 +162,22 @@ resource "azurerm_linux_virtual_machine" "vm" {
   }
 }
 
-output "public_ip" {
-  value = azurerm_public_ip.ip.ip_address
+# ============================================================
+# INFORMACOES DA INFRAESTRUTURA CRIADA
+# ============================================================
+
+output "resource_group" {
+  value = azurerm_resource_group.lab.name
+}
+
+output "nome_vm" {
+  value = azurerm_linux_virtual_machine.vm.name
+}
+
+output "ip_publico" {
+  value = azurerm_public_ip.vm.ip_address
+}
+
+output "tamanho_vm" {
+  value = azurerm_linux_virtual_machine.vm.size
 }
